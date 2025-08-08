@@ -16,7 +16,7 @@
 // ==/UserScript==
 
 (function () {
-  "use strict";
+  ("use strict");
 
   // Configuration and variables
   let selectionTimeout = null;
@@ -305,8 +305,14 @@
   });
 
   // Monitor mouse down - Start new selection
-  document.addEventListener("mousedown", () => {
-    // If not translating, mark as selection start and clear existing UI
+  document.addEventListener("mousedown", (e) => {
+    // Ignore interactions inside translator UI
+    if (
+      (translationBox && translationBox.contains(e.target)) ||
+      (selectionIcon && selectionIcon.contains(e.target))
+    ) {
+      return;
+    }
     if (!isTranslating) {
       selectionInProgress = true;
       clearTimeout(selectionTimeout);
@@ -314,14 +320,33 @@
     }
   });
 
-  // Monitor text selection changes - No longer creating icons, only tracking selection state
+  // Monitor text selection changes - ignore events inside UI
   document.addEventListener("selectionchange", () => {
-    // Only update in non-translating state
     if (!isTranslating) {
-      const selection = window.getSelection();
-      const selectedText = selection.toString().trim();
+      const sel = window.getSelection();
+      const selectedText = sel.toString().trim();
 
-      // If no text is selected and not in selection process, remove UI elements
+      const anchor = sel.anchorNode;
+      const focus = sel.focusNode;
+      const inBox =
+        translationBox &&
+        ((anchor &&
+          translationBox.contains(
+            anchor.nodeType === 1 ? anchor : anchor.parentElement
+          )) ||
+          (focus &&
+            translationBox.contains(
+              focus.nodeType === 1 ? focus : focus.parentElement
+            )) ||
+          (document.activeElement &&
+            translationBox.contains(document.activeElement)));
+      const inIcon =
+        selectionIcon &&
+        document.activeElement &&
+        selectionIcon.contains(document.activeElement);
+
+      if (inBox || inIcon) return;
+
       if (selectedText.length === 0 && !selectionInProgress) {
         clearTimeout(selectionTimeout);
         removeUIElements();
