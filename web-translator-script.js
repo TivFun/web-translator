@@ -13,6 +13,13 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_addStyle
 // @run-at       document-end
+// @connect      api.openai.com
+// @connect      generativelanguage.googleapis.com
+// @connect      api.anthropic.com
+// @connect      api.x.ai
+// @connect      api.deepseek.com
+// @connect      dashscope.aliyuncs.com
+// @connect      ark.cn-beijing.volces.com
 // ==/UserScript==
 
 (function () {
@@ -49,6 +56,9 @@
       aiSelectLabel: "Select AI",
       apiKeyLabel: "API Key",
       apiKeyPlaceholder: "Enter API Key",
+      // Added model i18n
+      modelLabel: "Model",
+      modelPlaceholder: "e.g. gpt-4o-mini or gemini-2.0-flash",
       targetLanguageLabel: "Target Language",
       chinese: "Chinese",
       japanese: "Japanese",
@@ -77,6 +87,9 @@
       aiSelectLabel: "选择 AI",
       apiKeyLabel: "API 密钥",
       apiKeyPlaceholder: "输入API密钥",
+      // Added model i18n
+      modelLabel: "模型",
+      modelPlaceholder: "如 gpt-4o-mini 或 gemini-2.0-flash",
       targetLanguageLabel: "翻译目标语言",
       chinese: "中文",
       japanese: "日语",
@@ -174,6 +187,8 @@
       const selectedAI = getStoredValue("selectedAI");
       const storedTargetLanguage = getStoredValue("targetLanguage", "chinese");
       const storedInterfaceLanguage = getStoredValue("interfaceLanguage", "zh");
+      // Added: get model name (user-configurable)
+      const modelName = getStoredValue("modelName", "");
 
       // Default to Chinese interface
       const uiLang = storedInterfaceLanguage || "zh";
@@ -203,8 +218,21 @@
 
       let translatedText = "";
 
-      console.log("Using AI model:", selectedAI);
+      console.log("Using AI provider:", selectedAI);
       console.log("Prompt content:", prompt);
+
+      // Default models by provider (used only when user leaves model empty)
+      const defaultModels = {
+        openai: "gpt-3.5-turbo",
+        gemini: "gemini-2.0-flash",
+        anthropic: "claude-3-haiku-20240307",
+        grok: "grok-2-latest",
+        deepseek: "deepseek-chat",
+        qwen: "qwen-plus",
+        doubao: "doubao-lite",
+      };
+      const effectiveModel =
+        modelName || defaultModels[selectedAI] || "gpt-3.5-turbo";
 
       return new Promise((resolve, reject) => {
         const requestDetails = {
@@ -216,12 +244,7 @@
             try {
               const data = JSON.parse(response.responseText);
 
-              if (selectedAI === "openai") {
-                if (response.status !== 200) {
-                  throw new Error(data.error?.message || "OpenAI API error");
-                }
-                translatedText = data.choices[0].message.content.trim();
-              } else if (selectedAI === "gemini") {
+              if (selectedAI === "gemini") {
                 if (response.status !== 200) {
                   throw new Error(
                     data.error?.message || "Google Gemini API error"
@@ -229,6 +252,23 @@
                 }
                 translatedText =
                   data.candidates[0].content.parts[0].text.trim();
+              } else if (selectedAI === "anthropic") {
+                if (response.status !== 200) {
+                  throw new Error(data.error?.message || "Anthropic API error");
+                }
+                translatedText = (
+                  data.content && data.content[0] && data.content[0].text
+                    ? data.content[0].text
+                    : ""
+                ).trim();
+              } else {
+                // OpenAI-compatible providers: openai, grok, deepseek, qwen, doubao
+                if (response.status !== 200) {
+                  throw new Error(
+                    data.error?.message || "Chat Completions API error"
+                  );
+                }
+                translatedText = data.choices[0].message.content.trim();
               }
 
               resolve(translatedText);
@@ -236,28 +276,14 @@
               reject(error);
             }
           },
-          onerror: function (error) {
+          onerror: function () {
             reject(new Error("Network error"));
           },
         };
 
-        if (selectedAI === "openai") {
-          // OpenAI API call
-          requestDetails.url = "https://api.openai.com/v1/chat/completions";
-          requestDetails.headers.Authorization = `Bearer ${apiKey}`;
-          requestDetails.data = JSON.stringify({
-            model: "gpt-3.5-turbo",
-            messages: [
-              {
-                role: "system",
-                content: getSystemPrompt(languageCode, preserveFormat),
-              },
-              { role: "user", content: prompt },
-            ],
-          });
-        } else if (selectedAI === "gemini") {
+        if (selectedAI === "gemini") {
           // Google Gemini API call
-          requestDetails.url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+          requestDetails.url = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
           requestDetails.data = JSON.stringify({
             contents: [
               {
@@ -270,6 +296,39 @@
                   },
                 ],
               },
+            ],
+          });
+        } else if (selectedAI === "anthropic") {
+          // Anthropic Claude (messages API)
+          requestDetails.url = "https://api.anthropic.com/v1/messages";
+          requestDetails.headers["x-api-key"] = apiKey;
+          requestDetails.headers["anthropic-version"] = "2023-06-01";
+          requestDetails.data = JSON.stringify({
+            model: effectiveModel,
+            system: getSystemPrompt(languageCode, preserveFormat),
+            messages: [{ role: "user", content: prompt }],
+            max_tokens: 1024,
+          });
+        } else {
+          // OpenAI-compatible chat completions
+          const providerUrls = {
+            openai: "https://api.openai.com/v1/chat/completions",
+            grok: "https://api.x.ai/v1/chat/completions",
+            deepseek: "https://api.deepseek.com/chat/completions",
+            qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            doubao: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+          };
+          const url = providerUrls[selectedAI] || providerUrls.openai;
+          requestDetails.url = url;
+          requestDetails.headers.Authorization = `Bearer ${apiKey}`;
+          requestDetails.data = JSON.stringify({
+            model: effectiveModel,
+            messages: [
+              {
+                role: "system",
+                content: getSystemPrompt(languageCode, preserveFormat),
+              },
+              { role: "user", content: prompt },
             ],
           });
         }
@@ -751,7 +810,17 @@
                             <select id="ai-select">
                                 <option value="openai">ChatGPT</option>
                                 <option value="gemini">Gemini</option>
+                                <option value="anthropic">Claude</option>
+                                <option value="grok">Grok</option>
+                                <option value="deepseek">DeepSeek</option>
+                                <option value="qwen">Qwen</option>
+                                <option value="doubao">Doubao</option>
                             </select>
+                        </div>
+
+                        <div class="settings-group">
+                            <label for="model-name">${uiTexts[interfaceLanguage].modelLabel}</label>
+                            <input type="text" id="model-name" placeholder="${uiTexts[interfaceLanguage].modelPlaceholder}" />
                         </div>
 
                         <div class="settings-group">
@@ -797,6 +866,22 @@
       ""
     );
     document.getElementById("api-key").value = getStoredValue("apiKey", "");
+    // Set model name with sensible default per provider
+    (function () {
+      const aiSelectedValue = document.getElementById("ai-select").value;
+      const defaultModels = {
+        gemini: "gemini-2.0-flash",
+        openai: "gpt-3.5-turbo",
+        anthropic: "claude-3-haiku-20240307",
+        grok: "grok-2-latest",
+        deepseek: "deepseek-chat",
+        qwen: "qwen-plus",
+        doubao: "doubao-lite",
+      };
+      const defaultModel = defaultModels[aiSelectedValue] || "gpt-3.5-turbo";
+      const storedModel = getStoredValue("modelName", defaultModel);
+      document.getElementById("model-name").value = storedModel;
+    })();
     document.getElementById("target-language").value = getStoredValue(
       "targetLanguage",
       "chinese"
@@ -824,6 +909,10 @@
           uiTexts[selectedLang].interfaceLanguageLabel;
         document.querySelector('label[for="ai-select"]').textContent =
           uiTexts[selectedLang].aiSelectLabel;
+        document.querySelector('label[for="model-name"]').textContent =
+          uiTexts[selectedLang].modelLabel;
+        document.getElementById("model-name").placeholder =
+          uiTexts[selectedLang].modelPlaceholder;
         document.querySelector('label[for="api-key"]').textContent =
           uiTexts[selectedLang].apiKeyLabel;
         document.getElementById("api-key").placeholder =
@@ -860,6 +949,7 @@
           interfaceLanguage:
             document.getElementById("interface-language").value,
           selectedAI: document.getElementById("ai-select").value,
+          modelName: document.getElementById("model-name").value.trim(),
           apiKey: document.getElementById("api-key").value.trim(),
           targetLanguage: document.getElementById("target-language").value,
           delaySeconds: parseFloat(
