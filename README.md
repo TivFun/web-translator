@@ -2,7 +2,7 @@
 
 A small, fast userscript that translates selected text on any webpage using your preferred AI provider. Designed for minimal friction: select text, hover the blue icon, get a macOS‑style translation popup, copy if needed, click outside to dismiss.
 
-- **Sub‑readme ([中文](https://github.com/TivFun/web-translator/blob/7f8dc3befc09e69adf408326ca678a439f6e4149/README.zh-CN.md?plain=1#L1))**: See `README.zh-CN.md`
+- **Sub‑readme ([中文](README.zh-CN.md))**: See `README.zh-CN.md`
 
 ### Features
 - **One‑gesture translate**: select → hover icon → translation box appears near the cursor
