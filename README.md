@@ -1,6 +1,6 @@
 ## Minimalist AI Translator (Tampermonkey)
 
-A small, fast userscript that translates selected text on any webpage using your preferred AI provider. Designed for minimal friction: select text, hover the blue icon, get a macOS‑style translation popup, copy if needed, click outside to dismiss.
+A small, fast userscript that translates selected text on any webpage using your preferred AI provider. Designed for minimal friction: select text, hover the blue icon, get a translation popup, copy if needed, click outside to dismiss.
 
 - **Sub‑readme ([中文](README.zh-CN.md))**: See `README.zh-CN.md`
 
