@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Minimalist AI Translator (Tampermonkey Version)
 // @namespace    https://tampermonkey.net/
-// @version      1.0.0
-// @description  A minimalist translator using AI APIs - Convert from Firefox extension to Tampermonkey userscript
+// @version      1.1.0
+// @description  A minimalist translator using AI APIs - add your own providers from the settings UI (per-provider API keys), no code editing required
 // @author       You
 // @match        *://*/*
 // @exclude      https://chrome.google.com/webstore/*
@@ -20,6 +20,7 @@
 // @connect      api.deepseek.com
 // @connect      dashscope.aliyuncs.com
 // @connect      ark.cn-beijing.volces.com
+// @connect      *
 // ==/UserScript==
 
 (function () {
@@ -70,6 +71,18 @@
       failedToLoad: "Failed to load settings: ",
       failedToSave: "Failed to save settings: ",
       openSettings: "Open Translator Settings",
+      // Custom provider management
+      addCustomOption: "➕ Add custom provider…",
+      customProvidersLabel: "Custom Providers",
+      noCustomProviders: "No custom providers yet",
+      npLabelPlaceholder: "Name (e.g. Moonshot)",
+      npUrlPlaceholder: "API endpoint URL",
+      npModelPlaceholder: "Default model (optional)",
+      addProviderButton: "Add Provider",
+      updateProviderButton: "Update Provider",
+      editProviderButton: "Edit",
+      cancelEditButton: "Cancel",
+      providerNeedsLabelUrl: "Please enter a name and an API endpoint URL.",
     },
     zh: {
       translatingTo: "正在翻译成",
@@ -101,8 +114,101 @@
       failedToLoad: "加载设置失败: ",
       failedToSave: "保存设置失败: ",
       openSettings: "打开翻译器设置",
+      // Custom provider management
+      addCustomOption: "➕ 添加自定义服务商…",
+      customProvidersLabel: "自定义服务商",
+      noCustomProviders: "暂无自定义服务商",
+      npLabelPlaceholder: "名称（如 Moonshot）",
+      npUrlPlaceholder: "API 接口地址",
+      npModelPlaceholder: "默认模型（可选）",
+      addProviderButton: "添加服务商",
+      updateProviderButton: "更新服务商",
+      editProviderButton: "编辑",
+      cancelEditButton: "取消",
+      providerNeedsLabelUrl: "请填写名称和 API 接口地址。",
     },
   };
+
+  // ─── Provider registry ────────────────────────────────────────────────────
+  // Built-in providers. Users can ALSO add their own from the settings UI
+  // (stored separately and merged in via getAllProviders()), so adding a new
+  // provider normally requires NO code changes at all.
+  //
+  // Each provider is plain data (no functions) so custom ones can be persisted:
+  //   label        — name shown in the dropdown
+  //   defaultModel — used when the user leaves the model field empty
+  //   url          — API endpoint
+  //   type:
+  //     "openai-compat" — standard OpenAI chat/completions format (most common;
+  //                       DeepSeek, Grok, Qwen, Doubao, Moonshot, Together… all
+  //                       use this — just point `url` at their endpoint)
+  //     "gemini"        — Google Generative Language API (model + key go in URL)
+  //     "anthropic"     — Anthropic Messages API
+  const BUILTIN_PROVIDERS = {
+    openai: {
+      label: "ChatGPT",
+      defaultModel: "gpt-3.5-turbo",
+      type: "openai-compat",
+      url: "https://api.openai.com/v1/chat/completions",
+    },
+    gemini: {
+      label: "Gemini",
+      defaultModel: "gemini-2.0-flash",
+      type: "gemini",
+      url: "https://generativelanguage.googleapis.com/v1beta/models",
+    },
+    anthropic: {
+      label: "Claude",
+      defaultModel: "claude-3-haiku-20240307",
+      type: "anthropic",
+      url: "https://api.anthropic.com/v1/messages",
+    },
+    grok: {
+      label: "Grok",
+      defaultModel: "grok-2-latest",
+      type: "openai-compat",
+      url: "https://api.x.ai/v1/chat/completions",
+    },
+    deepseek: {
+      label: "DeepSeek",
+      defaultModel: "deepseek-chat",
+      type: "openai-compat",
+      url: "https://api.deepseek.com/chat/completions",
+    },
+    qwen: {
+      label: "Qwen",
+      defaultModel: "qwen-plus",
+      type: "openai-compat",
+      url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    },
+    doubao: {
+      label: "Doubao",
+      defaultModel: "doubao-lite",
+      type: "openai-compat",
+      url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    },
+  };
+
+  // User-defined providers live in GM storage as { id: {label, type, url, defaultModel} }
+  function getCustomProviders() {
+    const raw = getStoredValue("customProviders", {});
+    return raw && typeof raw === "object" ? raw : {};
+  }
+  function setCustomProviders(obj) {
+    setStoredValue("customProviders", obj);
+  }
+  // Merged view used everywhere. Custom providers override built-ins on id clash.
+  function getAllProviders() {
+    return Object.assign({}, BUILTIN_PROVIDERS, getCustomProviders());
+  }
+  // Build the request URL for a provider (gemini needs model + key inlined).
+  function buildProviderUrl(provider, model, apiKey) {
+    if (provider.type === "gemini") {
+      return `${provider.url}/${model}:generateContent?key=${apiKey}`;
+    }
+    return provider.url;
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Storage functions using GM API
   function getStoredValue(key, defaultValue = null) {
@@ -112,6 +218,38 @@
   function setStoredValue(key, value) {
     GM_setValue(key, value);
   }
+
+  // ─── Per-provider API key & model ─────────────────────────────────────────
+  // Each provider keeps its own key/model under "apiKey_<id>" / "model_<id>",
+  // so switching providers no longer wipes what you typed for the others.
+  function getApiKeyFor(providerId) {
+    return getStoredValue("apiKey_" + providerId, "");
+  }
+  function setApiKeyFor(providerId, value) {
+    setStoredValue("apiKey_" + providerId, value);
+  }
+  function getModelFor(providerId) {
+    return getStoredValue("model_" + providerId, "");
+  }
+  function setModelFor(providerId, value) {
+    setStoredValue("model_" + providerId, value);
+  }
+
+  // One-time migration: older versions stored a single global apiKey/modelName.
+  // Move them onto whatever provider was selected at the time.
+  function migrateLegacyKeyIfNeeded() {
+    if (getStoredValue("legacyKeyMigrated", false)) return;
+    const legacyId = getStoredValue("selectedAI", "");
+    const legacyKey = getStoredValue("apiKey", "");
+    const legacyModel = getStoredValue("modelName", "");
+    if (legacyId) {
+      if (legacyKey && !getApiKeyFor(legacyId)) setApiKeyFor(legacyId, legacyKey);
+      if (legacyModel && !getModelFor(legacyId))
+        setModelFor(legacyId, legacyModel);
+    }
+    setStoredValue("legacyKeyMigrated", true);
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Load configuration from storage
   function loadConfiguration() {
@@ -182,13 +320,13 @@
     console.log("Requested target language:", requestTargetLang);
 
     try {
-      // Get stored API key, AI model, target language and interface language
-      const apiKey = getStoredValue("apiKey");
+      // Get selected provider, then its own stored API key & model
       const selectedAI = getStoredValue("selectedAI");
+      const apiKey = getApiKeyFor(selectedAI);
       const storedTargetLanguage = getStoredValue("targetLanguage", "chinese");
       const storedInterfaceLanguage = getStoredValue("interfaceLanguage", "zh");
-      // Added: get model name (user-configurable)
-      const modelName = getStoredValue("modelName", "");
+      // Model name for this provider (user-configurable, may be empty)
+      const modelName = getModelFor(selectedAI);
 
       // Default to Chinese interface
       const uiLang = storedInterfaceLanguage || "zh";
@@ -221,18 +359,9 @@
       console.log("Using AI provider:", selectedAI);
       console.log("Prompt content:", prompt);
 
-      // Default models by provider (used only when user leaves model empty)
-      const defaultModels = {
-        openai: "gpt-3.5-turbo",
-        gemini: "gemini-2.0-flash",
-        anthropic: "claude-3-haiku-20240307",
-        grok: "grok-2-latest",
-        deepseek: "deepseek-chat",
-        qwen: "qwen-plus",
-        doubao: "doubao-lite",
-      };
+      const provider = getAllProviders()[selectedAI];
       const effectiveModel =
-        modelName || defaultModels[selectedAI] || "gpt-3.5-turbo";
+        modelName || (provider && provider.defaultModel) || "gpt-3.5-turbo";
 
       return new Promise((resolve, reject) => {
         const requestDetails = {
@@ -244,7 +373,8 @@
             try {
               const data = JSON.parse(response.responseText);
 
-              if (selectedAI === "gemini") {
+              const providerType = provider ? provider.type : "openai-compat";
+              if (providerType === "gemini") {
                 if (response.status !== 200) {
                   throw new Error(
                     data.error?.message || "Google Gemini API error"
@@ -252,7 +382,7 @@
                 }
                 translatedText =
                   data.candidates[0].content.parts[0].text.trim();
-              } else if (selectedAI === "anthropic") {
+              } else if (providerType === "anthropic") {
                 if (response.status !== 200) {
                   throw new Error(data.error?.message || "Anthropic API error");
                 }
@@ -262,7 +392,7 @@
                     : ""
                 ).trim();
               } else {
-                // OpenAI-compatible providers: openai, grok, deepseek, qwen, doubao
+                // openai-compat: OpenAI, Grok, DeepSeek, Qwen, Doubao, etc.
                 if (response.status !== 200) {
                   throw new Error(
                     data.error?.message || "Chat Completions API error"
@@ -281,9 +411,9 @@
           },
         };
 
-        if (selectedAI === "gemini") {
-          // Google Gemini API call
-          requestDetails.url = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent?key=${apiKey}`;
+        const providerType = provider ? provider.type : "openai-compat";
+        if (providerType === "gemini") {
+          requestDetails.url = buildProviderUrl(provider, effectiveModel, apiKey);
           requestDetails.data = JSON.stringify({
             contents: [
               {
@@ -298,9 +428,8 @@
               },
             ],
           });
-        } else if (selectedAI === "anthropic") {
-          // Anthropic Claude (messages API)
-          requestDetails.url = "https://api.anthropic.com/v1/messages";
+        } else if (providerType === "anthropic") {
+          requestDetails.url = buildProviderUrl(provider, effectiveModel, apiKey);
           requestDetails.headers["x-api-key"] = apiKey;
           requestDetails.headers["anthropic-version"] = "2023-06-01";
           requestDetails.data = JSON.stringify({
@@ -310,16 +439,9 @@
             max_tokens: 1024,
           });
         } else {
-          // OpenAI-compatible chat completions
-          const providerUrls = {
-            openai: "https://api.openai.com/v1/chat/completions",
-            grok: "https://api.x.ai/v1/chat/completions",
-            deepseek: "https://api.deepseek.com/chat/completions",
-            qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            doubao: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-          };
-          const url = providerUrls[selectedAI] || providerUrls.openai;
-          requestDetails.url = url;
+          // openai-compat — fall back to OpenAI URL if provider unknown
+          requestDetails.url =
+            (provider && provider.url) || BUILTIN_PROVIDERS.openai.url;
           requestDetails.headers.Authorization = `Bearer ${apiKey}`;
           requestDetails.data = JSON.stringify({
             model: effectiveModel,
@@ -808,14 +930,33 @@
                         <div class="settings-group">
                             <label for="ai-select">${uiTexts[interfaceLanguage].aiSelectLabel}</label>
                             <select id="ai-select">
-                                <option value="openai">ChatGPT</option>
-                                <option value="gemini">Gemini</option>
-                                <option value="anthropic">Claude</option>
-                                <option value="grok">Grok</option>
-                                <option value="deepseek">DeepSeek</option>
-                                <option value="qwen">Qwen</option>
-                                <option value="doubao">Doubao</option>
+                                ${Object.entries(getAllProviders())
+                                  .map(([id, p]) => `<option value="${id}">${p.label}</option>`)
+                                  .join("")}
+                                <option value="__add_custom__">${uiTexts[interfaceLanguage].addCustomOption}</option>
                             </select>
+                        </div>
+
+                        <div class="settings-group" id="custom-provider-section" style="display:none">
+                            <div class="custom-provider-header">
+                                <label>${uiTexts[interfaceLanguage].customProvidersLabel}</label>
+                                <button type="button" id="close-custom-btn" class="close-custom-button">×</button>
+                            </div>
+                            <div id="custom-provider-list"></div>
+                            <div class="add-provider-form">
+                                <input type="text" id="np-label" placeholder="${uiTexts[interfaceLanguage].npLabelPlaceholder}" />
+                                <select id="np-type">
+                                    <option value="openai-compat">OpenAI-compatible</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="anthropic">Anthropic</option>
+                                </select>
+                                <input type="text" id="np-url" placeholder="${uiTexts[interfaceLanguage].npUrlPlaceholder}" />
+                                <input type="text" id="np-model" placeholder="${uiTexts[interfaceLanguage].npModelPlaceholder}" />
+                                <div class="add-provider-actions">
+                                    <button type="button" id="add-provider-btn" class="add-provider-button">${uiTexts[interfaceLanguage].addProviderButton}</button>
+                                    <button type="button" id="cancel-edit-btn" class="cancel-edit-button" style="display:none">${uiTexts[interfaceLanguage].cancelEditButton}</button>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="settings-group">
@@ -865,23 +1006,16 @@
       "selectedAI",
       ""
     );
-    document.getElementById("api-key").value = getStoredValue("apiKey", "");
-    // Set model name with sensible default per provider
-    (function () {
-      const aiSelectedValue = document.getElementById("ai-select").value;
-      const defaultModels = {
-        gemini: "gemini-2.0-flash",
-        openai: "gpt-3.5-turbo",
-        anthropic: "claude-3-haiku-20240307",
-        grok: "grok-2-latest",
-        deepseek: "deepseek-chat",
-        qwen: "qwen-plus",
-        doubao: "doubao-lite",
-      };
-      const defaultModel = defaultModels[aiSelectedValue] || "gpt-3.5-turbo";
-      const storedModel = getStoredValue("modelName", defaultModel);
-      document.getElementById("model-name").value = storedModel;
-    })();
+    // Fill the API key + model fields for a given provider. The model field
+    // shows the provider's saved model, or its default as a starting point.
+    function loadProviderFields(providerId) {
+      const p = getAllProviders()[providerId];
+      document.getElementById("api-key").value = getApiKeyFor(providerId);
+      const storedModel = getModelFor(providerId);
+      document.getElementById("model-name").value =
+        storedModel || (p && p.defaultModel) || "";
+    }
+    loadProviderFields(document.getElementById("ai-select").value);
     document.getElementById("target-language").value = getStoredValue(
       "targetLanguage",
       "chinese"
@@ -894,6 +1028,172 @@
       "maxWidth",
       400
     );
+
+    // ─── Custom provider management ───────────────────────────────────────────
+    // Re-render the dropdown so newly added/removed providers show up live.
+    function refreshProviderDropdown(selectId) {
+      const aiSelect = document.getElementById("ai-select");
+      const all = getAllProviders();
+      const keepSelection = selectId || aiSelect.value;
+      aiSelect.innerHTML =
+        Object.entries(all)
+          .map(([id, p]) => `<option value="${id}">${p.label}</option>`)
+          .join("") +
+        `<option value="__add_custom__">${uiTexts[interfaceLanguage].addCustomOption}</option>`;
+      if (all[keepSelection]) aiSelect.value = keepSelection;
+      loadProviderFields(aiSelect.value);
+    }
+
+    // Which custom provider the form is currently editing (null = add mode).
+    let editingProviderId = null;
+
+    // Put the form back into "add" mode and clear it.
+    function resetProviderForm() {
+      editingProviderId = null;
+      document.getElementById("np-label").value = "";
+      document.getElementById("np-url").value = "";
+      document.getElementById("np-model").value = "";
+      document.getElementById("np-type").value = "openai-compat";
+      document.getElementById("add-provider-btn").textContent =
+        uiTexts[interfaceLanguage].addProviderButton;
+      document.getElementById("cancel-edit-btn").style.display = "none";
+    }
+
+    // Load a provider's values into the form and switch to "edit" mode.
+    function startEditingProvider(id) {
+      const p = getCustomProviders()[id];
+      if (!p) return;
+      editingProviderId = id;
+      document.getElementById("np-label").value = p.label;
+      document.getElementById("np-type").value = p.type;
+      document.getElementById("np-url").value = p.url;
+      document.getElementById("np-model").value = p.defaultModel || "";
+      document.getElementById("add-provider-btn").textContent =
+        uiTexts[interfaceLanguage].updateProviderButton;
+      document.getElementById("cancel-edit-btn").style.display = "";
+    }
+
+    // Render the list of user-added providers, each with edit + delete buttons.
+    function renderCustomProviderList() {
+      const listEl = document.getElementById("custom-provider-list");
+      const custom = getCustomProviders();
+      const ids = Object.keys(custom);
+      if (ids.length === 0) {
+        listEl.innerHTML = `<div class="custom-provider-empty">${uiTexts[interfaceLanguage].noCustomProviders}</div>`;
+        return;
+      }
+      listEl.innerHTML = ids
+        .map(
+          (id) => `
+            <div class="custom-provider-item" data-id="${id}">
+              <span class="cp-name">${custom[id].label}</span>
+              <span class="cp-type">${custom[id].type}</span>
+              <button type="button" class="cp-edit" data-id="${id}">${uiTexts[interfaceLanguage].editProviderButton}</button>
+              <button type="button" class="cp-delete" data-id="${id}">×</button>
+            </div>`
+        )
+        .join("");
+      listEl.querySelectorAll(".cp-edit").forEach((btn) => {
+        btn.addEventListener("click", function () {
+          startEditingProvider(this.getAttribute("data-id"));
+        });
+      });
+      listEl.querySelectorAll(".cp-delete").forEach((btn) => {
+        btn.addEventListener("click", function () {
+          const id = this.getAttribute("data-id");
+          const obj = getCustomProviders();
+          delete obj[id];
+          setCustomProviders(obj);
+          if (editingProviderId === id) resetProviderForm();
+          renderCustomProviderList();
+          refreshProviderDropdown();
+        });
+      });
+    }
+
+    renderCustomProviderList();
+
+    // Show / hide the custom-provider management panel.
+    function openCustomSection() {
+      document.getElementById("custom-provider-section").style.display = "";
+      renderCustomProviderList();
+    }
+    function closeCustomSection() {
+      resetProviderForm();
+      document.getElementById("custom-provider-section").style.display = "none";
+    }
+
+    // Remember the last real provider so the "➕ add" entry can revert to it.
+    let lastRealProvider = document.getElementById("ai-select").value;
+    document.getElementById("ai-select").addEventListener("change", function () {
+      if (this.value === "__add_custom__") {
+        // Not a real provider — open the panel and restore the previous choice.
+        this.value = lastRealProvider;
+        openCustomSection();
+        return;
+      }
+      lastRealProvider = this.value;
+      loadProviderFields(this.value);
+    });
+
+    document
+      .getElementById("close-custom-btn")
+      .addEventListener("click", closeCustomSection);
+
+    document
+      .getElementById("cancel-edit-btn")
+      .addEventListener("click", resetProviderForm);
+
+    document
+      .getElementById("add-provider-btn")
+      .addEventListener("click", function () {
+        const label = document.getElementById("np-label").value.trim();
+        const type = document.getElementById("np-type").value;
+        const url = document.getElementById("np-url").value.trim();
+        const defaultModel = document.getElementById("np-model").value.trim();
+
+        if (!label || !url) {
+          alert(uiTexts[interfaceLanguage].providerNeedsLabelUrl);
+          return;
+        }
+
+        const obj = getCustomProviders();
+        let id;
+        if (editingProviderId) {
+          // Edit mode: update in place, keeping the same id (and any saved key).
+          id = editingProviderId;
+          obj[id] = { label, type, url, defaultModel };
+        } else {
+          // Add mode: derive a stable id, unique against built-ins + customs.
+          const base =
+            label
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "") || "provider";
+          const all = getAllProviders();
+          id = base;
+          let n = 2;
+          while (all[id]) id = `${base}-${n++}`;
+          obj[id] = { label, type, url, defaultModel };
+        }
+        setCustomProviders(obj);
+
+        const wasEditing = editingProviderId !== null;
+        resetProviderForm();
+        renderCustomProviderList();
+
+        if (wasEditing) {
+          // Editing: keep whatever provider was selected, just refresh labels.
+          refreshProviderDropdown(lastRealProvider);
+        } else {
+          // Adding: select the new provider and collapse the panel, landing
+          // the user back on the simple two-step flow.
+          refreshProviderDropdown(id);
+          lastRealProvider = id;
+          closeCustomSection();
+        }
+      });
+    // ──────────────────────────────────────────────────────────────────────────
 
     // Interface language change handler
     document
@@ -945,23 +1245,29 @@
     document
       .getElementById("save-settings")
       .addEventListener("click", function () {
+        const selectedAI = document.getElementById("ai-select").value;
+
+        // Global (non-provider-specific) settings
         const settings = {
           interfaceLanguage:
             document.getElementById("interface-language").value,
-          selectedAI: document.getElementById("ai-select").value,
-          modelName: document.getElementById("model-name").value.trim(),
-          apiKey: document.getElementById("api-key").value.trim(),
+          selectedAI: selectedAI,
           targetLanguage: document.getElementById("target-language").value,
           delaySeconds: parseFloat(
             document.getElementById("delay-seconds").value
           ),
           maxWidth: parseInt(document.getElementById("max-width").value),
         };
-
-        // Save all settings
         Object.keys(settings).forEach((key) => {
           setStoredValue(key, settings[key]);
         });
+
+        // Key + model belong to the currently selected provider
+        setApiKeyFor(selectedAI, document.getElementById("api-key").value.trim());
+        setModelFor(
+          selectedAI,
+          document.getElementById("model-name").value.trim()
+        );
 
         // Update local variables
         loadConfiguration();
@@ -1247,6 +1553,143 @@
             border: 1px solid #dcedc8;
             opacity: 1;
         }
+
+        /* Custom provider management */
+        .custom-provider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .custom-provider-header label {
+            margin-bottom: 0;
+        }
+
+        .close-custom-button {
+            background: none;
+            border: none;
+            font-size: 20px;
+            line-height: 1;
+            color: #999;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+
+        .close-custom-button:hover {
+            color: #555;
+        }
+
+        #custom-provider-list {
+            margin-bottom: 10px;
+        }
+
+        .custom-provider-empty {
+            font-size: 12px;
+            color: #999;
+            padding: 4px 0;
+        }
+
+        .custom-provider-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            background-color: #f7f7f7;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 6px;
+        }
+
+        .custom-provider-item .cp-name {
+            font-weight: 500;
+            color: #333;
+            font-size: 13px;
+        }
+
+        .custom-provider-item .cp-type {
+            font-size: 11px;
+            color: #888;
+            background-color: #ececec;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-left: auto;
+        }
+
+        .custom-provider-item .cp-edit {
+            background: none;
+            border: 1px solid #cfcfcf;
+            color: #2196f3;
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+
+        .custom-provider-item .cp-edit:hover {
+            background-color: #eef5ff;
+        }
+
+        .custom-provider-item .cp-delete {
+            background: none;
+            border: none;
+            color: #c0392b;
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+
+        .custom-provider-item .cp-delete:hover {
+            color: #e74c3c;
+        }
+
+        .add-provider-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .add-provider-actions .add-provider-button {
+            flex: 1;
+        }
+
+        .cancel-edit-button {
+            background-color: #eeeeee;
+            color: #555;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 14px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .cancel-edit-button:hover {
+            background-color: #e0e0e0;
+        }
+
+        .add-provider-form {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 10px;
+            border: 1px dashed #d0d0d0;
+            border-radius: 6px;
+        }
+
+        .add-provider-button {
+            background-color: #4caf50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .add-provider-button:hover {
+            background-color: #43a047;
+        }
     `);
 
   // Register menu command
@@ -1256,6 +1699,7 @@
   );
 
   // Initialise
+  migrateLegacyKeyIfNeeded();
   loadConfiguration();
 
   // Add test function, usable in console
