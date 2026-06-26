@@ -4,14 +4,6 @@
 
 一个超轻量的油猴脚本（userscript），用你选定的 AI 模型翻译网页上的任意文字。选中文字，把鼠标移到弹出的小图标上，译文就出现在原地。
 
-无需注册、无需服务器——它用**你自己的 API 密钥**，直接从浏览器调用 AI 服务商的接口。
-
-## 预览
-
-![截图](https://github.com/user-attachments/assets/eabc3813-27cf-4643-9563-915d5095abc2)
-![截图](https://github.com/user-attachments/assets/a53295df-60be-4bb1-a40c-fcb41eaa0bdc)
-![截图](https://github.com/user-attachments/assets/034907bb-bbff-4e9c-99c2-f9be52a4f7d2)
-
 ## 功能特点
 
 - 将选中的文字翻译成**中文、日语或英语**。
@@ -40,14 +32,14 @@
 
 密钥要去各服务商自己的网站申请。几个常见的：
 
-| 服务商 | 申请地址 |
-| --- | --- |
-| ChatGPT（OpenAI） | platform.openai.com |
-| Gemini（Google） | aistudio.google.com |
-| Claude（Anthropic） | console.anthropic.com |
-| DeepSeek（深度求索） | platform.deepseek.com |
-| Qwen（通义千问） | dashscope.console.aliyun.com |
-| Doubao（豆包） | console.volcengine.com |
+| 服务商               | 申请地址                     |
+| -------------------- | ---------------------------- |
+| ChatGPT（OpenAI）    | platform.openai.com          |
+| Gemini（Google）     | aistudio.google.com          |
+| Claude（Anthropic）  | console.anthropic.com        |
+| DeepSeek（深度求索） | platform.deepseek.com        |
+| Qwen（通义千问）     | dashscope.console.aliyun.com |
+| Doubao（豆包）       | console.volcengine.com       |
 
 大多数服务商按用量计费，但翻译这种短文本通常很便宜。
 
